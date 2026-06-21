@@ -47,6 +47,11 @@ module tb_fc1_stage;
     // -------------------------------------------------------------------------
     // DUT signals
     // -------------------------------------------------------------------------
+    logic               clock;
+    logic               reset;
+    logic               start;
+    logic               busy;
+    logic               done;
     logic signed [31:0] act_in  [0:TB_IN-1];
     logic signed [7:0]  weights [0:TB_OUT-1][0:TB_IN-1];
     logic signed [31:0] bias    [0:TB_OUT-1];
@@ -59,11 +64,20 @@ module tb_fc1_stage;
         .IN_SIZE (TB_IN),
         .OUT_SIZE(TB_OUT)
     ) dut (
+        .clock  (clock),
+        .reset  (reset),
+        .start  (start),
+        .busy   (busy),
+        .done   (done),
         .act_in (act_in),
         .weights(weights),
         .bias   (bias),
         .act_out(act_out)
     );
+
+    // 10 ns clock
+    initial clock = 1'b0;
+    always #5 clock = ~clock;
 
     integer fail_count;
 
@@ -75,7 +89,16 @@ module tb_fc1_stage;
         fail_count = 0;
 
         // ------------------------------------------------------------------
-        // Apply stimulus
+        // Reset
+        // ------------------------------------------------------------------
+        reset = 1'b1;
+        start = 1'b0;
+        @(posedge clock);
+        @(posedge clock);
+        reset = 1'b0;
+
+        // ------------------------------------------------------------------
+        // Apply stimulus (held stable through the whole run)
         // ------------------------------------------------------------------
 
         // act_in = [1, 2, 3, 4]
@@ -98,7 +121,27 @@ module tb_fc1_stage;
         bias[0] = 32'sd5;
         bias[1] = -32'sd20;
 
-        #1;   // Allow combinational logic to settle
+        // ------------------------------------------------------------------
+        // Kick off the multi-cycle dot product and wait for done
+        // ------------------------------------------------------------------
+        @(posedge clock); #1;
+        start = 1'b1;
+        @(posedge clock); #1;
+        start = 1'b0;
+
+        // wait for done pulse (bounded so a wedged DUT can't hang the sim)
+        begin
+            integer guard;
+            guard = 0;
+            while (done !== 1'b1 && guard < 10000) begin
+                @(posedge clock); #1;
+                guard++;
+            end
+            if (done !== 1'b1) begin
+                $display("LOG: %0t : ERROR : tb_fc1_stage : done never asserted", $time);
+                fail_count++;
+            end
+        end
 
         // ==================================================================
         // Phase 1 — dot_acc: raw dot products (before bias)
