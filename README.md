@@ -100,6 +100,28 @@ flipped back (corrected transparently). A non-zero syndrome with the overall
 parity *clean* is the signature of a two-bit error — flagged as **uncorrectable**
 rather than silently mis-corrected.
 
+## Behavioral model results (Python, not RTL-measured)
+
+These accuracy numbers come from `mock/behavioral_chip.py` — a Python behavioral
+model of the accelerator — swept across fault-injection rates by `host/sweep.py`.
+They show the *statistical* payoff of hardening over many runs, and are distinct
+from (and not a substitute for) the single-fault RTL demo above.
+
+| Injected BER | Unhardened accuracy | Hardened accuracy |
+|---|---|---|
+| 0.0   | 100%  | 100% |
+| 0.003 | 96.7% | 100% |
+| 0.03  | 96.7% | 100% |
+| 0.1   | 96.7% | 100% |
+| 0.2   | 76.7% | 100% |
+| 0.4   | 70.0% | 100% |
+
+(30 inferences per run; full data in `sweep_results.csv`, plot in
+`sweep_accuracy.png`.) The unhardened baseline degrades as bit-flips accumulate in
+weight memory; the hardened model holds because SECDED corrects the single-bit
+errors that dominate. These are behavioral-model figures, **not** measurements
+from the SystemVerilog RTL.
+
 ## Architecture
 
 ```mermaid
