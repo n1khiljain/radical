@@ -1,0 +1,27 @@
+bench_accel_top:
+  deps:
+    - weight_mem.sv
+    - weight_loader.sv
+    - mac_array.sv
+    - accel_top.sv
+    - tb_accel_top.sv
+  top: tb_accel_top
+
+bench_weight_loader:
+  deps:
+    - weight_mem.sv
+    - weight_loader.sv
+    - tb_weight_loader.sv
+  top: tb_weight_loader
+
+bench_weight_mem:
+  deps:
+    - weight_mem.sv
+    - tb_weight_mem.sv
+  top: tb_weight_mem
+
+bench_mac_array:
+  deps:
+    - mac_array.sv
+    - tb_mac_array.sv
+  top: tb_mac_array
