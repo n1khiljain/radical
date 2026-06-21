@@ -88,11 +88,19 @@ module chip (
     // They only update on the clock edge AFTER wts_done first goes high.
     // This keeps all compute-stage always_comb blocks silent while weights
     // are being written byte-by-byte — solving the O(n²) sim slowdown.
-    logic signed [7:0]  conv1_w_p [0:7][0:2][0:2];
+    // conv1 weights are now ECC-protected (SECDED block below). The other three
+    // arrays remain plain staged registers (incremental integration — conv1 first).
     logic signed [7:0]  conv2_w_p [0:15][0:7][0:2][0:2];
     logic signed [7:0]  fc1_w_p   [0:31][0:783];
     logic signed [7:0]  fc2_w_p   [0:9][0:31];
     logic               wts_done_r;
+
+    // ---- conv1 SECDED-protected weight store -------------------------------
+    logic [12:0]        c1w_cw  [0:71];   // stored 13-bit SECDED codewords (the protected state)
+    logic [12:0]        c1w_enc [0:71];   // encoder outputs (comb, from raw c1w)
+    logic signed [7:0]  c1w_dec [0:71];   // decoder corrected data (comb)
+    logic [1:0]         c1w_err [0:71];   // per-weight ECC status (00 ok / 01 corrected / 10 double)
+    logic signed [7:0]  conv1_w_dec [0:7][0:2][0:2];   // decoded -> conv1 port shape
 
     // =========================================================================
     // AXI-stream receiver — weight load phase then image capture phase
@@ -164,14 +172,53 @@ module chip (
     always_ff @(posedge clock) begin
         wts_done_r <= wts_done;
         if (wts_done && !wts_done_r) begin
-            for (int o=0;o< 8;o++) for (int r=0;r<3;r++) for (int c=0;c<3;c++)
-                conv1_w_p[o][r][c] <= c1w[o*9 + r*3 + c];
+            // SECDED-encode conv1 weights into the protected codeword store.
+            // conv1 reads them back through the decoder (c1w_dec) every cycle.
+            for (int i=0;i<72;i++)
+                c1w_cw[i] <= c1w_enc[i];
             for (int o=0;o<16;o++) for (int i=0;i<8;i++) for (int r=0;r<3;r++) for (int c=0;c<3;c++)
                 conv2_w_p[o][i][r][c] <= c2w[o*72 + i*9 + r*3 + c];
             for (int o=0;o<32;o++) for (int i=0;i<784;i++)
                 fc1_w_p[o][i] <= f1w[o*784 + i];
             for (int o=0;o<10;o++) for (int i=0;i<32;i++)
                 fc2_w_p[o][i] <= f2w[o*32 + i];
+        end
+    end
+
+    // =========================================================================
+    // conv1 weight ECC — SECDED encode-on-store / decode-on-read.
+    // 72 codecs: each encodes c1w[i] (latched into c1w_cw at load completion)
+    // and decodes the stored codeword c1w_cw[i] live, correcting single-bit
+    // upsets. In the fault-free case c1w_dec == c1w, so conv1 sees identical
+    // weights and inference is bit-for-bit unchanged.
+    // =========================================================================
+    genvar gi;
+    generate
+        for (gi = 0; gi < 72; gi++) begin : g_c1w_ecc
+            ecc_secded u_c1w_ecc (
+                .data_in        (c1w[gi]),       // encode side (raw weight)
+                .codeword_out   (c1w_enc[gi]),
+                .codeword_in    (c1w_cw[gi]),    // decode side (stored codeword)
+                .data_corrected (c1w_dec[gi]),
+                .error_status   (c1w_err[gi])
+            );
+        end
+    endgenerate
+
+    // Decoded weights reshaped into conv1's [out_ch][kr][kc] port
+    always_comb begin
+        for (int o=0;o<8;o++) for (int r=0;r<3;r++) for (int c=0;c<3;c++)
+            conv1_w_dec[o][r][c] = c1w_dec[o*9 + r*3 + c];
+    end
+
+    // Aggregate ECC status across the 72 conv1 weights (drives telemetry).
+    logic c1w_any_correct, c1w_any_double;
+    always_comb begin
+        c1w_any_correct = 1'b0;
+        c1w_any_double  = 1'b0;
+        for (int i=0;i<72;i++) begin
+            if (c1w_err[i] == 2'b01) c1w_any_correct = 1'b1;
+            if (c1w_err[i] == 2'b10) c1w_any_double  = 1'b1;
         end
     end
 
@@ -268,7 +315,7 @@ module chip (
         .busy            (),
         .done            (seq_done),
         .image_in        (img),
-        .conv1_w         (conv1_w_p),
+        .conv1_w         (conv1_w_dec),
         .conv2_w         (conv2_w_p),
         .fc1_w           (fc1_w_p),
         .fc1_b           (f1b),
@@ -285,8 +332,11 @@ module chip (
     telemetry_regs #(.FIFO_DEPTH(16)) u_tel (
         .clock                (clock),
         .reset                (reset),
-        .scrub_corrections_inc(1'b0),
-        .ecc_double_errors_inc(1'b0),
+        // Real ECC status from the live conv1 weight path. seq_start gates the
+        // pulse to once per inference (counts an inference that read a corrected
+        // / uncorrectable conv1 weight). Fault-free => both low => counters hold.
+        .scrub_corrections_inc(seq_start & c1w_any_correct),
+        .ecc_double_errors_inc(seq_start & c1w_any_double),
         .tmr_disagreements_inc(1'b0),
         .inferences_total_inc (seq_done),
         .event_push           (1'b0),
