@@ -12,6 +12,19 @@
 //     act_out[o]  = max(0, pre_relu[o])[31:0]                        (32-bit)
 //
 // =============================================================================
+// VERILATOR COMPILE-TIME NOTE
+// =============================================================================
+//
+//   A single always_comb with OUT_SIZE × IN_SIZE MACs (e.g. 32×784 = 25,088)
+//   causes Verilator to generate one massive C++ function that takes minutes
+//   to compile.  The solution is to use a generate loop — one always_comb per
+//   output neuron — so Verilator emits OUT_SIZE small functions instead.
+//
+//   dot_acc[] and pre_relu[] are kept as module-level nets (driven via
+//   continuous assignment from generate scope) so testbench hierarchical
+//   references like dut.dot_acc[o] and dut.pre_relu[o] still work.
+//
+// =============================================================================
 // SIZING RATIONALE
 // =============================================================================
 //
@@ -43,58 +56,49 @@ module fc1_stage #(
 );
 
     // =========================================================================
-    // Internal arrays (accessible from testbench via hierarchical reference)
+    // Module-level arrays (accessible via hierarchical path from testbenches)
+    // Each element is driven by a continuous assignment from generate scope.
     // =========================================================================
-
-    // 64-bit dot-product results (pre-bias)
-    logic signed [63:0] dot_acc  [0:OUT_SIZE-1];
-
-    // 64-bit post-bias values (input to ReLU)
-    logic signed [63:0] pre_relu [0:OUT_SIZE-1];
-
-    // Shared temporaries — sequentially valid inside always_comb
-    logic signed [63:0] in64, wt64, acc_tmp, bias64;
+    logic signed [63:0] dot_acc  [0:OUT_SIZE-1];   // raw dot products
+    logic signed [63:0] pre_relu [0:OUT_SIZE-1];   // post-bias, pre-ReLU
 
     // =========================================================================
-    // Step 1 — Dot product: Σ act_in[i] × weights[o][i]
+    // Per-neuron generate blocks
     //
-    //   in64 = sign_extend(act_in[i],  32→64)  [automatic signed assignment]
-    //   wt64 = sign_extend(weights[o][i], 8→64) [automatic signed assignment]
-    //   Product: in64 × wt64 → 64-bit (safe: max 2^38 << 2^63)
+    // Splitting into OUT_SIZE independent always_comb blocks lets Verilator
+    // emit one C++ function per neuron (~IN_SIZE ops each) rather than one
+    // giant function (~OUT_SIZE × IN_SIZE ops), which compiles far faster.
+    //
+    // Each instance g_neuron[o] owns:
+    //   dot_g  — 64-bit private accumulator for neuron o
+    // And drives (via continuous assignment):
+    //   dot_acc[o], pre_relu[o], act_out[o]
     // =========================================================================
-    always_comb begin
-        for (int o = 0; o < OUT_SIZE; o++) begin
-            acc_tmp = 64'sh0;
-            for (int i = 0; i < IN_SIZE; i++) begin
-                in64    = act_in[i];       // 32-bit signed → 64-bit (sign-extend)
-                wt64    = weights[o][i];   //  8-bit signed → 64-bit (sign-extend)
-                acc_tmp = acc_tmp + in64 * wt64;
+    generate
+        for (genvar o = 0; o < OUT_SIZE; o++) begin : g_neuron
+
+            logic signed [63:0] dot_g;  // private accumulator for this neuron
+
+            // -----------------------------------------------------------------
+            // Dot product: Σ act_in[i] × weights[o][i]
+            // Both operands are sign-extended to 64-bit before multiplication.
+            // -----------------------------------------------------------------
+            always_comb begin
+                dot_g = 64'sh0;
+                for (int i = 0; i < IN_SIZE; i++)
+                    dot_g = dot_g + 64'(signed'(act_in[i])) *
+                                    64'(signed'(weights[o][i]));
             end
-            dot_acc[o] = acc_tmp;
-        end
-    end
 
-    // =========================================================================
-    // Step 2 — Bias addition (32-bit bias sign-extended to 64 bits)
-    // =========================================================================
-    always_comb begin
-        for (int o = 0; o < OUT_SIZE; o++) begin
-            bias64      = bias[o];          // 32-bit signed → 64-bit (sign-extend)
-            pre_relu[o] = dot_acc[o] + bias64;
-        end
-    end
+            // -----------------------------------------------------------------
+            // Expose through module-level arrays (testbench observability)
+            // and compute ReLU output.
+            // -----------------------------------------------------------------
+            assign dot_acc[o]  = dot_g;
+            assign pre_relu[o] = dot_g + 64'(signed'(bias[o]));
+            assign act_out[o]  = pre_relu[o][63] ? 32'sh0 : pre_relu[o][31:0];
 
-    // =========================================================================
-    // Step 3 — ReLU + truncate to 32-bit output
-    //
-    //   Sign bit [63] of the 64-bit accumulator determines the clamp.
-    //   Non-negative values are truncated to [31:0]; the architecture guarantees
-    //   these fit in 32-bit signed after FC1.
-    // =========================================================================
-    always_comb begin
-        for (int o = 0; o < OUT_SIZE; o++) begin
-            act_out[o] = pre_relu[o][63] ? 32'sh0 : pre_relu[o][31:0];
         end
-    end
+    endgenerate
 
 endmodule : fc1_stage
