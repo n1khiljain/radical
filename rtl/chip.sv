@@ -88,11 +88,9 @@ module chip (
     // They only update on the clock edge AFTER wts_done first goes high.
     // This keeps all compute-stage always_comb blocks silent while weights
     // are being written byte-by-byte — solving the O(n²) sim slowdown.
-    // conv1 weights are now ECC-protected (SECDED block below). The other three
-    // arrays remain plain staged registers (incremental integration — conv1 first).
-    logic signed [7:0]  conv2_w_p [0:15][0:7][0:2][0:2];
+    // conv1 + conv2 + fc2 weights are ECC-protected (SECDED blocks below).
+    // fc1 (f1w) stays a plain staged register — see note in the fc1 region.
     logic signed [7:0]  fc1_w_p   [0:31][0:783];
-    logic signed [7:0]  fc2_w_p   [0:9][0:31];
     logic               wts_done_r;
 
     // ---- conv1 SECDED-protected weight store -------------------------------
@@ -101,6 +99,20 @@ module chip (
     logic signed [7:0]  c1w_dec [0:71];   // decoder corrected data (comb)
     logic [1:0]         c1w_err [0:71];   // per-weight ECC status (00 ok / 01 corrected / 10 double)
     logic signed [7:0]  conv1_w_dec [0:7][0:2][0:2];   // decoded -> conv1 port shape
+
+    // ---- conv2 SECDED-protected weight store (1152 weights) ----------------
+    logic [12:0]        c2w_cw  [0:1151];
+    logic [12:0]        c2w_enc [0:1151];
+    logic signed [7:0]  c2w_dec [0:1151];
+    logic [1:0]         c2w_err [0:1151];
+    logic signed [7:0]  conv2_w_dec [0:15][0:7][0:2][0:2];  // decoded -> conv2 port shape
+
+    // ---- fc2 SECDED-protected weight store (320 weights) -------------------
+    logic [12:0]        f2w_cw  [0:319];
+    logic [12:0]        f2w_enc [0:319];
+    logic signed [7:0]  f2w_dec [0:319];
+    logic [1:0]         f2w_err [0:319];
+    logic signed [7:0]  fc2_w_dec [0:9][0:31];              // decoded -> fc2 port shape
 
     // =========================================================================
     // AXI-stream receiver — weight load phase then image capture phase
@@ -172,16 +184,16 @@ module chip (
     always_ff @(posedge clock) begin
         wts_done_r <= wts_done;
         if (wts_done && !wts_done_r) begin
-            // SECDED-encode conv1 weights into the protected codeword store.
-            // conv1 reads them back through the decoder (c1w_dec) every cycle.
+            // SECDED-encode conv1 + conv2 weights into their protected codeword
+            // stores. Both layers read them back through decoders every cycle.
             for (int i=0;i<72;i++)
                 c1w_cw[i] <= c1w_enc[i];
-            for (int o=0;o<16;o++) for (int i=0;i<8;i++) for (int r=0;r<3;r++) for (int c=0;c<3;c++)
-                conv2_w_p[o][i][r][c] <= c2w[o*72 + i*9 + r*3 + c];
+            for (int i=0;i<1152;i++)
+                c2w_cw[i] <= c2w_enc[i];
+            for (int i=0;i<320;i++)
+                f2w_cw[i] <= f2w_enc[i];
             for (int o=0;o<32;o++) for (int i=0;i<784;i++)
                 fc1_w_p[o][i] <= f1w[o*784 + i];
-            for (int o=0;o<10;o++) for (int i=0;i<32;i++)
-                fc2_w_p[o][i] <= f2w[o*32 + i];
         end
     end
 
@@ -219,6 +231,70 @@ module chip (
         for (int i=0;i<72;i++) begin
             if (c1w_err[i] == 2'b01) c1w_any_correct = 1'b1;
             if (c1w_err[i] == 2'b10) c1w_any_double  = 1'b1;
+        end
+    end
+
+    // =========================================================================
+    // conv2 weight ECC — same SECDED pattern, 1152 codecs.
+    // =========================================================================
+    genvar gj;
+    generate
+        for (gj = 0; gj < 1152; gj++) begin : g_c2w_ecc
+            ecc_secded u_c2w_ecc (
+                .data_in        (c2w[gj]),
+                .codeword_out   (c2w_enc[gj]),
+                .codeword_in    (c2w_cw[gj]),
+                .data_corrected (c2w_dec[gj]),
+                .error_status   (c2w_err[gj])
+            );
+        end
+    endgenerate
+
+    // Decoded weights reshaped into conv2's [out_ch][in_ch][kr][kc] port
+    always_comb begin
+        for (int o=0;o<16;o++) for (int i=0;i<8;i++) for (int r=0;r<3;r++) for (int c=0;c<3;c++)
+            conv2_w_dec[o][i][r][c] = c2w_dec[o*72 + i*9 + r*3 + c];
+    end
+
+    logic c2w_any_correct, c2w_any_double;
+    always_comb begin
+        c2w_any_correct = 1'b0;
+        c2w_any_double  = 1'b0;
+        for (int i=0;i<1152;i++) begin
+            if (c2w_err[i] == 2'b01) c2w_any_correct = 1'b1;
+            if (c2w_err[i] == 2'b10) c2w_any_double  = 1'b1;
+        end
+    end
+
+    // =========================================================================
+    // fc2 weight ECC — same SECDED pattern, 320 codecs.
+    // =========================================================================
+    genvar gk;
+    generate
+        for (gk = 0; gk < 320; gk++) begin : g_f2w_ecc
+            ecc_secded u_f2w_ecc (
+                .data_in        (f2w[gk]),
+                .codeword_out   (f2w_enc[gk]),
+                .codeword_in    (f2w_cw[gk]),
+                .data_corrected (f2w_dec[gk]),
+                .error_status   (f2w_err[gk])
+            );
+        end
+    endgenerate
+
+    // Decoded weights reshaped into fc2's [out=10][in=32] port
+    always_comb begin
+        for (int o=0;o<10;o++) for (int i=0;i<32;i++)
+            fc2_w_dec[o][i] = f2w_dec[o*32 + i];
+    end
+
+    logic f2w_any_correct, f2w_any_double;
+    always_comb begin
+        f2w_any_correct = 1'b0;
+        f2w_any_double  = 1'b0;
+        for (int i=0;i<320;i++) begin
+            if (f2w_err[i] == 2'b01) f2w_any_correct = 1'b1;
+            if (f2w_err[i] == 2'b10) f2w_any_double  = 1'b1;
         end
     end
 
@@ -316,10 +392,10 @@ module chip (
         .done            (seq_done),
         .image_in        (img),
         .conv1_w         (conv1_w_dec),
-        .conv2_w         (conv2_w_p),
+        .conv2_w         (conv2_w_dec),
         .fc1_w           (fc1_w_p),
         .fc1_b           (f1b),
-        .fc2_w           (fc2_w_p),
+        .fc2_w           (fc2_w_dec),
         .fc2_b           (f2b),
         .logits          (seq_logits),
         .predicted_class (seq_class)
@@ -335,8 +411,8 @@ module chip (
         // Real ECC status from the live conv1 weight path. seq_start gates the
         // pulse to once per inference (counts an inference that read a corrected
         // / uncorrectable conv1 weight). Fault-free => both low => counters hold.
-        .scrub_corrections_inc(seq_start & c1w_any_correct),
-        .ecc_double_errors_inc(seq_start & c1w_any_double),
+        .scrub_corrections_inc(seq_start & (c1w_any_correct | c2w_any_correct | f2w_any_correct)),
+        .ecc_double_errors_inc(seq_start & (c1w_any_double  | c2w_any_double  | f2w_any_double)),
         .tmr_disagreements_inc(1'b0),
         .inferences_total_inc (seq_done),
         .event_push           (1'b0),

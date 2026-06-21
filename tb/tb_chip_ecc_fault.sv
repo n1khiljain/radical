@@ -1,15 +1,17 @@
 // =============================================================================
-// tb_chip_ecc_fault.sv — proves chip.sv's conv1 ECC wiring is LIVE (not dead).
+// tb_chip_ecc_fault.sv — proves chip.sv's weight-ECC wiring is LIVE for every
+// ECC-protected array (conv1 c1w, conv2 c2w, fc2 f2w).
 //
-// Loads real weights + an MNIST image, then runs inference three ways, injecting
-// single-event upsets into the STORED conv1 codewords (u_chip.c1w_cw) between
-// runs — the same hierarchical-poke technique as the standalone tb_ecc_demo:
+// Loads real weights + an MNIST image, then for each protected array injects
+// SEUs into the STORED codewords (u_chip.*_cw) and re-runs inference:
+//   single-bit  -> corrected   -> class held at 3, scrub_corrections +1
+//   double-bit  -> uncorrectable-> ecc_double_errors +1, class may change
+// Faults are undone (flipped back) between arrays so each starts clean.
+// Telemetry counters are cumulative/free-running, so the table reports deltas.
 //
-//   1. clean         -> class 3, scrub 0, ecc2 0
-//   2. 1-bit fault   -> class 3 (ECC corrected), scrub 1, ecc2 0
-//   3. 2-bit fault   -> ecc2 increments (uncorrectable), class may change
-//
-// Counters are cumulative/free-running, so the table reports absolute values.
+// NOTE: fc1 (f1w, 25,088 weights) is NOT ECC-protected — the per-entry codec
+// pattern needs 25,088 codecs (measured: ~407 MB sim binary), infeasible. It
+// needs a sequential decode keyed to fc1's pipelined access; see report.
 // =============================================================================
 `timescale 1ns/1ps
 module tb_chip_ecc_fault;
@@ -40,7 +42,6 @@ module tb_chip_ecc_fault;
         .s_axis_tready(s_axis_tready),.s_axis_tlast(s_axis_tlast)
     );
 
-    // ---- AXI-lite tasks ----------------------------------------------------
     task automatic axi_write(input logic [31:0] addr, input logic [31:0] data);
         @(posedge clock); #1;
         s_axil_awaddr=addr; s_axil_awvalid=1;
@@ -57,7 +58,6 @@ module tb_chip_ecc_fault;
         data=s_axil_rdata; s_axil_rready=0;
     endtask
 
-    // ---- Backdoor loads (mirror tb_chip_infer) -----------------------------
     task automatic backdoor_weights(input string fn);
         integer fd, i; logic [7:0] b;
         fd = $fopen(fn, "rb");
@@ -76,7 +76,7 @@ module tb_chip_ecc_fault;
         for (i=0;i<4;i++) void'($fread(b,fd));
         for (i=0;i<10;i++)    begin void'($fread(b,fd)); u_chip.f2b[i]={{24{b[7]}},b}; end
         $fclose(fd);
-        u_chip.wts_done = 1'b1;     // triggers staging -> c1w_cw SECDED-encoded
+        u_chip.wts_done = 1'b1;
         @(posedge clock); #1;
     endtask
 
@@ -88,15 +88,14 @@ module tb_chip_ecc_fault;
         @(posedge clock); #1;
     endtask
 
-    // ---- One inference, returns predicted class ----------------------------
     task automatic run_infer(output logic [3:0] cls);
         logic [31:0] status, rd; integer guard;
-        axi_write(32'h0, 32'h1);              // CTRL[0]=1 (start)
+        axi_write(32'h0, 32'h1);
         guard=0; status=0;
         while (!(status & 32'h2) && guard < 4000) begin
             axi_read(32'h4, status); guard++;
         end
-        axi_read(32'h20, rd); cls = rd[3:0];  // LAST_OUTPUT
+        axi_read(32'h20, rd); cls = rd[3:0];
     endtask
 
     task automatic read_tel(output logic [31:0] scrub, output logic [31:0] ecc2);
@@ -104,46 +103,69 @@ module tb_chip_ecc_fault;
         axi_read(32'h14, ecc2);
     endtask
 
+    // Inject single (bit5) / double (bit5+bit2) into a stored codeword and undo.
+    // Hierarchical paths can't be parameterised, so one macro pair per array.
+    `define SINGLE(P) u_chip.P[0][5] = ~u_chip.P[0][5]
+    `define SECOND(P) u_chip.P[0][2] = ~u_chip.P[0][2]
+
     string img_path;
-    logic [3:0]  c0, c1, c2;
-    logic [31:0] s0, e0, s1, e1, s2, e2;
-    localparam int IDX = 0;     // conv1 weight whose codeword gets the SEU
+    logic [3:0]  c;
+    logic [31:0] s, e, ps, pe;
+    integer fail;
 
     initial begin
         if (!$value$plusargs("IMG=%s", img_path)) img_path = "/tmp/img0.bin";
+        fail = 0;
 
         repeat(6) @(posedge clock); #1; reset = 0; @(posedge clock); #1;
         backdoor_weights("weights.bin");
         backdoor_image(img_path);
 
-        // ---- 1. CLEAN ----------------------------------------------------
-        run_infer(c0); read_tel(s0, e0);
+        $display("============================================================");
+        $display(" chip-level weight-ECC liveness — all protected arrays");
+        $display(" scenario        class   scrub(delta)   ecc2(delta)");
 
-        // ---- 2. SINGLE-BIT FAULT: flip one bit of stored codeword IDX ----
-        u_chip.c1w_cw[IDX][5] = ~u_chip.c1w_cw[IDX][5];
-        run_infer(c1); read_tel(s1, e1);
+        // ---- clean baseline ---------------------------------------------
+        run_infer(c); read_tel(s, e); ps=s; pe=e;
+        $display(" clean             %0d       %0d (+0)        %0d (+0)", c, s, e);
+        if (!(c==3 && s==0 && e==0)) fail++;
 
-        // ---- 3. DOUBLE-BIT FAULT: flip a SECOND bit of the same codeword -
-        u_chip.c1w_cw[IDX][2] = ~u_chip.c1w_cw[IDX][2];
-        run_infer(c2); read_tel(s2, e2);
+        // ================= conv1 (c1w) ===================================
+        `SINGLE(c1w_cw);                 run_infer(c); read_tel(s,e);
+        $display(" c1w 1-bit         %0d       %0d (+%0d)        %0d (+%0d)", c, s, s-ps, e, e-pe);
+        if (!(c==3 && (s-ps)==1 && (e-pe)==0)) fail++;
+        `SINGLE(c1w_cw); ps=s; pe=e;     // undo
+        `SINGLE(c1w_cw); `SECOND(c1w_cw); run_infer(c); read_tel(s,e);
+        $display(" c1w 2-bit         %0d       %0d (+%0d)        %0d (+%0d)", c, s, s-ps, e, e-pe);
+        if (!((e-pe)==1)) fail++;
+        `SINGLE(c1w_cw); `SECOND(c1w_cw); ps=s; pe=e;   // undo
+
+        // ================= conv2 (c2w) ===================================
+        `SINGLE(c2w_cw);                 run_infer(c); read_tel(s,e);
+        $display(" c2w 1-bit         %0d       %0d (+%0d)        %0d (+%0d)", c, s, s-ps, e, e-pe);
+        if (!(c==3 && (s-ps)==1 && (e-pe)==0)) fail++;
+        `SINGLE(c2w_cw); ps=s; pe=e;
+        `SINGLE(c2w_cw); `SECOND(c2w_cw); run_infer(c); read_tel(s,e);
+        $display(" c2w 2-bit         %0d       %0d (+%0d)        %0d (+%0d)", c, s, s-ps, e, e-pe);
+        if (!((e-pe)==1)) fail++;
+        `SINGLE(c2w_cw); `SECOND(c2w_cw); ps=s; pe=e;
+
+        // ================= fc2 (f2w) =====================================
+        `SINGLE(f2w_cw);                 run_infer(c); read_tel(s,e);
+        $display(" f2w 1-bit         %0d       %0d (+%0d)        %0d (+%0d)", c, s, s-ps, e, e-pe);
+        if (!(c==3 && (s-ps)==1 && (e-pe)==0)) fail++;
+        `SINGLE(f2w_cw); ps=s; pe=e;
+        `SINGLE(f2w_cw); `SECOND(f2w_cw); run_infer(c); read_tel(s,e);
+        $display(" f2w 2-bit         %0d       %0d (+%0d)        %0d (+%0d)", c, s, s-ps, e, e-pe);
+        if (!((e-pe)==1)) fail++;
+        `SINGLE(f2w_cw); `SECOND(f2w_cw);
 
         $display("============================================================");
-        $display(" chip-level ECC liveness proof (conv1 weight codeword [%0d])", IDX);
-        $display(" run             class   scrub_corrections   ecc_double_errors");
-        $display(" clean             %0d            %0d                  %0d", c0, s0, e0);
-        $display(" 1-bit fault       %0d            %0d                  %0d", c1, s1, e1);
-        $display(" 2-bit fault       %0d            %0d                  %0d", c2, s2, e2);
-        $display("============================================================");
-
-        if (c0==3 && s0==0 && e0==0 &&
-            c1==3 && s1==1 && e1==0 &&
-            e2==1) begin
-            $display(" ECC LIVE PASS: 1-bit fault corrected (class held 3, scrub 1);");
-            $display("                2-bit fault flagged uncorrectable (ecc2 1).");
-        end else begin
-            $display(" ECC LIVE FAIL: c0=%0d s0=%0d e0=%0d | c1=%0d s1=%0d e1=%0d | c2=%0d s2=%0d e2=%0d",
-                     c0,s0,e0,c1,s1,e1,c2,s2,e2);
-        end
+        if (fail==0)
+            $display(" ECC LIVE PASS (c1w,c2w,f2w): single-bit corrected + scrub+1;");
+        else
+            $display(" ECC LIVE FAIL: %0d check(s) failed", fail);
+        $display(" (f1w not protected — see header note)");
         $display("============================================================");
         $finish;
     end
