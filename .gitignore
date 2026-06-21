@@ -19,3 +19,10 @@ simulation_results/
 
 # EDA tool scratch
 radical/
+obj_dir/
+*.vvp
+sim_*
+obj_dir/
+*.vvp
+*.tree
+sim_*
