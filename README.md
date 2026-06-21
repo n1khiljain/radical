@@ -1,4 +1,4 @@
-# RAD-HARD-AI
+# Radical: our RAD-HARD-AI
 
 **A radiation-hardened INT8 CNN inference accelerator in SystemVerilog.**
 
