@@ -96,7 +96,8 @@ module ctrl_seq (
         IDLE      = 3'd0,
         RUN_CONV1 = 3'd1,
         RUN_CONV2 = 3'd2,
-        RUN_FC1   = 3'd3,
+        RUN_FC1   = 3'd3,   // launch fc1 (pulse start)
+        WAIT_FC1  = 3'd7,   // stall until fc1's multi-cycle dot product finishes
         RUN_FC2   = 3'd4,
         ARGMAX    = 3'd5,
         DONE      = 3'd6
@@ -178,12 +179,22 @@ module ctrl_seq (
     end
 
     // =========================================================================
-    // fc1_stage instance  (784→32, dot-product + bias + ReLU, combinational)
-    // Wired to flat_conv2 (flattened registered conv2 output)
+    // fc1_stage instance  (784→32, dot-product + bias + ReLU)
+    // NOW MULTI-CYCLE: driven by start/busy/done handshake (see RUN_FC1/WAIT_FC1).
+    // Wired to flat_conv2 (flattened registered conv2 output), held stable for
+    // the whole run.
     // =========================================================================
     logic signed [31:0] fc1_out [0:31];
+    logic               fc1_start;   // FSM-driven one-cycle launch pulse
+    logic               fc1_busy;    // (observability; unused by the FSM)
+    logic               fc1_done;    // asserts when fc1_out is valid
 
     fc1_stage #(.IN_SIZE(784), .OUT_SIZE(32)) u_fc1 (
+        .clock  (clock),
+        .reset  (reset),
+        .start  (fc1_start),
+        .busy   (fc1_busy),
+        .done   (fc1_done),
         .act_in (flat_conv2),
         .weights(fc1_w),
         .bias   (fc1_b),
@@ -228,10 +239,12 @@ module ctrl_seq (
             state           <= IDLE;
             busy            <= 1'b0;
             done            <= 1'b0;
+            fc1_start       <= 1'b0;
             predicted_class <= 4'd0;
             for (int i = 0; i < 10; i++) logits[i] <= 32'sh0;
         end else begin
-            done <= 1'b0;   // default: clear done pulse every cycle
+            done      <= 1'b0;   // default: clear done pulse every cycle
+            fc1_start <= 1'b0;   // default: fc1 launch is a one-cycle pulse
 
             case (state)
 
@@ -270,11 +283,23 @@ module ctrl_seq (
                 end
 
                 // -----------------------------------------------------------------
-                // fc1 is computing from flat_conv2 (← conv2_buf). Capture fc1 output.
+                // fc1 is now MULTI-CYCLE. flat_conv2 (← conv2_buf, registered) is
+                // stable here. Pulse fc1's start and stall in WAIT_FC1 until done.
                 RUN_FC1: begin
-                    state <= RUN_FC2;
-                    for (int i = 0; i < 32; i++)
-                        fc1_buf[i] <= fc1_out[i];
+                    fc1_start <= 1'b1;     // launch fc1 (sampled at the next edge)
+                    state     <= WAIT_FC1;
+                end
+
+                // -----------------------------------------------------------------
+                // Hold while fc1 accumulates (IN_SIZE+2 cycles). fc1's inputs
+                // (flat_conv2, fc1_w, fc1_b) stay stable throughout. On fc1_done,
+                // fc1_out (= act_out) is valid — capture it and advance.
+                WAIT_FC1: begin
+                    if (fc1_done) begin
+                        for (int i = 0; i < 32; i++)
+                            fc1_buf[i] <= fc1_out[i];
+                        state <= RUN_FC2;
+                    end
                 end
 
                 // -----------------------------------------------------------------

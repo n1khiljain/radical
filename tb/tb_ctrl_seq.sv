@@ -41,6 +41,7 @@ module tb_ctrl_seq;
     localparam int ST_RUN_FC2   = 4;
     localparam int ST_ARGMAX    = 5;
     localparam int ST_DONE      = 6;
+    localparam int ST_WAIT_FC1  = 7;   // fc1 is now multi-cycle
 
     // -------------------------------------------------------------------------
     // DUT signals
@@ -163,8 +164,22 @@ module tb_ctrl_seq;
         @(posedge clock); #1;   // posedge: RUN_CONV2→RUN_FC1, conv2_buf latched
         chk(int'(dut.state), ST_RUN_FC1,   "State = RUN_FC1");
 
-        @(posedge clock); #1;   // posedge: RUN_FC1→RUN_FC2, fc1_buf latched
-        chk(int'(dut.state), ST_RUN_FC2,   "State = RUN_FC2");
+        @(posedge clock); #1;   // posedge: RUN_FC1→WAIT_FC1, fc1 launched
+        chk(int'(dut.state), ST_WAIT_FC1,  "State = WAIT_FC1 (fc1 multi-cycle)");
+
+        // fc1 now runs IN_SIZE+2 cycles; the FSM must stall here until fc1_done.
+        // Poll (bounded) until it leaves WAIT_FC1 instead of assuming one cycle.
+        begin
+            integer guard;
+            guard = 0;
+            while (int'(dut.state) == ST_WAIT_FC1 && guard < 2000) begin
+                @(posedge clock); #1;
+                guard++;
+            end
+            $display("LOG: %0t : INFO  : tb_ctrl_seq : fc1 ran %0d cycle(s) in WAIT_FC1",
+                     $time, guard);
+        end
+        chk(int'(dut.state), ST_RUN_FC2,   "State = RUN_FC2 (after fc1 done)");
 
         @(posedge clock); #1;   // posedge: RUN_FC2→ARGMAX, fc2_buf+logits latched
         chk(int'(dut.state), ST_ARGMAX,    "State = ARGMAX");
