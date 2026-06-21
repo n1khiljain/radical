@@ -1,3 +1,63 @@
+bench_ctrl_seq:
+  deps:
+    - conv1_stage.sv
+    - conv2_stage.sv
+    - fc1_stage.sv
+    - fc2_stage.sv
+    - ctrl_seq.sv
+    - tb_ctrl_seq.sv
+  top: tb_ctrl_seq
+
+bench_fc1_stage:
+  deps:
+    - fc1_stage.sv
+    - tb_fc1_stage.sv
+  top: tb_fc1_stage
+
+bench_fc2_stage:
+  deps:
+    - fc2_stage.sv
+    - tb_fc2_stage.sv
+  top: tb_fc2_stage
+
+bench_conv2_stage:
+  deps:
+    - conv2_stage.sv
+    - tb_conv2_stage.sv
+  top: tb_conv2_stage
+
+bench_telemetry_regs:
+  deps:
+    - telemetry_regs.sv
+    - tb_telemetry_regs.sv
+  top: tb_telemetry_regs
+
+bench_conv1_stage:
+  deps:
+    - conv1_stage.sv
+    - tb_conv1_stage.sv
+  top: tb_conv1_stage
+
+bench_fault_replay:
+  deps:
+    - weight_mem.sv
+    - fault_replay.sv
+    - tb_fault_replay.sv
+  top: tb_fault_replay
+
+bench_weight_mem_ecc:
+  deps:
+    - ecc_secded.sv
+    - weight_mem_ecc.sv
+    - tb_weight_mem_ecc.sv
+  top: tb_weight_mem_ecc
+
+bench_ecc_secded:
+  deps:
+    - ecc_secded.sv
+    - tb_ecc_secded.sv
+  top: tb_ecc_secded
+
 bench_accel_top:
   deps:
     - weight_mem.sv
