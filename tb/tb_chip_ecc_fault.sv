@@ -114,7 +114,7 @@ module tb_chip_ecc_fault;
     integer fail;
 
     initial begin
-        if (!$value$plusargs("IMG=%s", img_path)) img_path = "/tmp/img0.bin";
+        if (!$value$plusargs("IMG=%s", img_path)) img_path = "tb/demo_img0.bin";
         fail = 0;
 
         repeat(6) @(posedge clock); #1; reset = 0; @(posedge clock); #1;
@@ -122,51 +122,70 @@ module tb_chip_ecc_fault;
         backdoor_image(img_path);
 
         $display("============================================================");
-        $display(" chip-level weight-ECC liveness — all protected arrays");
-        $display(" scenario        class   scrub(delta)   ecc2(delta)");
+        $display(" RAD-HARD-AI  —  chip-level weight-ECC liveness");
+        $display(" image=%s   protected arrays: c1w(conv1) c2w(conv2) f2w(fc2)", img_path);
+        $display("------------------------------------------------------------");
+        $display(" scenario       class   scrub(delta)   ecc2(delta)   verdict");
+        $display("------------------------------------------------------------");
 
         // ---- clean baseline ---------------------------------------------
         run_infer(c); read_tel(s, e); ps=s; pe=e;
-        $display(" clean             %0d       %0d (+0)        %0d (+0)", c, s, e);
+        $display(" clean            %0d       %0d (+0)        %0d (+0)     baseline", c, s, e);
+        $display("RESULT clean class=%0d scrub=%0d ecc2=%0d", c, s, e);
         if (!(c==3 && s==0 && e==0)) fail++;
 
         // ================= conv1 (c1w) ===================================
         `SINGLE(c1w_cw);                 run_infer(c); read_tel(s,e);
-        $display(" c1w 1-bit         %0d       %0d (+%0d)        %0d (+%0d)", c, s, s-ps, e, e-pe);
+        $display(" c1w 1-bit        %0d       %0d (+%0d)        %0d (+%0d)     %s",
+                 c, s, s-ps, e, e-pe, (c==3 && (s-ps)==1) ? "CORRECTED" : "FAIL");
+        $display("RESULT c1w_single class=%0d scrub=%0d ecc2=%0d", c, s, e);
         if (!(c==3 && (s-ps)==1 && (e-pe)==0)) fail++;
         `SINGLE(c1w_cw); ps=s; pe=e;     // undo
         `SINGLE(c1w_cw); `SECOND(c1w_cw); run_infer(c); read_tel(s,e);
-        $display(" c1w 2-bit         %0d       %0d (+%0d)        %0d (+%0d)", c, s, s-ps, e, e-pe);
+        $display(" c1w 2-bit        %0d       %0d (+%0d)        %0d (+%0d)     %s",
+                 c, s, s-ps, e, e-pe, ((e-pe)==1) ? "DETECTED" : "FAIL");
+        $display("RESULT c1w_double class=%0d scrub=%0d ecc2=%0d", c, s, e);
         if (!((e-pe)==1)) fail++;
         `SINGLE(c1w_cw); `SECOND(c1w_cw); ps=s; pe=e;   // undo
 
         // ================= conv2 (c2w) ===================================
         `SINGLE(c2w_cw);                 run_infer(c); read_tel(s,e);
-        $display(" c2w 1-bit         %0d       %0d (+%0d)        %0d (+%0d)", c, s, s-ps, e, e-pe);
+        $display(" c2w 1-bit        %0d       %0d (+%0d)        %0d (+%0d)     %s",
+                 c, s, s-ps, e, e-pe, (c==3 && (s-ps)==1) ? "CORRECTED" : "FAIL");
+        $display("RESULT c2w_single class=%0d scrub=%0d ecc2=%0d", c, s, e);
         if (!(c==3 && (s-ps)==1 && (e-pe)==0)) fail++;
         `SINGLE(c2w_cw); ps=s; pe=e;
         `SINGLE(c2w_cw); `SECOND(c2w_cw); run_infer(c); read_tel(s,e);
-        $display(" c2w 2-bit         %0d       %0d (+%0d)        %0d (+%0d)", c, s, s-ps, e, e-pe);
+        $display(" c2w 2-bit        %0d       %0d (+%0d)        %0d (+%0d)     %s",
+                 c, s, s-ps, e, e-pe, ((e-pe)==1) ? "DETECTED" : "FAIL");
+        $display("RESULT c2w_double class=%0d scrub=%0d ecc2=%0d", c, s, e);
         if (!((e-pe)==1)) fail++;
         `SINGLE(c2w_cw); `SECOND(c2w_cw); ps=s; pe=e;
 
         // ================= fc2 (f2w) =====================================
         `SINGLE(f2w_cw);                 run_infer(c); read_tel(s,e);
-        $display(" f2w 1-bit         %0d       %0d (+%0d)        %0d (+%0d)", c, s, s-ps, e, e-pe);
+        $display(" f2w 1-bit        %0d       %0d (+%0d)        %0d (+%0d)     %s",
+                 c, s, s-ps, e, e-pe, (c==3 && (s-ps)==1) ? "CORRECTED" : "FAIL");
+        $display("RESULT f2w_single class=%0d scrub=%0d ecc2=%0d", c, s, e);
         if (!(c==3 && (s-ps)==1 && (e-pe)==0)) fail++;
         `SINGLE(f2w_cw); ps=s; pe=e;
         `SINGLE(f2w_cw); `SECOND(f2w_cw); run_infer(c); read_tel(s,e);
-        $display(" f2w 2-bit         %0d       %0d (+%0d)        %0d (+%0d)", c, s, s-ps, e, e-pe);
+        $display(" f2w 2-bit        %0d       %0d (+%0d)        %0d (+%0d)     %s",
+                 c, s, s-ps, e, e-pe, ((e-pe)==1) ? "DETECTED" : "FAIL");
+        $display("RESULT f2w_double class=%0d scrub=%0d ecc2=%0d", c, s, e);
         if (!((e-pe)==1)) fail++;
         `SINGLE(f2w_cw); `SECOND(f2w_cw);
 
-        $display("============================================================");
+        $display("------------------------------------------------------------");
         if (fail==0)
-            $display(" ECC LIVE PASS (c1w,c2w,f2w): single-bit corrected + scrub+1;");
+            $display(" ECC LIVE PASS: single-bit corrected (class held, scrub+1),");
         else
             $display(" ECC LIVE FAIL: %0d check(s) failed", fail);
-        $display(" (f1w not protected — see header note)");
+        $display("              double-bit detected (ecc2+1) for c1w, c2w, f2w.");
+        $display(" (fc1 f1w not ECC-protected: 25,088-codec parallel pattern");
+        $display("  infeasible; needs sequential decode — deferred.)");
         $display("============================================================");
+        $display("RESULT verdict pass=%0d fails=%0d", (fail==0), fail);
         $finish;
     end
 endmodule : tb_chip_ecc_fault
