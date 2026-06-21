@@ -1,27 +1,110 @@
+bench_ctrl_seq:
+  deps:
+    - rtl/conv1_stage.sv
+    - rtl/conv2_stage.sv
+    - rtl/fc1_stage.sv
+    - rtl/fc2_stage.sv
+    - rtl/ctrl_seq.sv
+    - tb/tb_ctrl_seq.sv
+  top: tb_ctrl_seq
+
+bench_fc1_stage:
+  deps:
+    - rtl/fc1_stage.sv
+    - tb/tb_fc1_stage.sv
+  top: tb_fc1_stage
+
+bench_fc2_stage:
+  deps:
+    - rtl/fc2_stage.sv
+    - tb/tb_fc2_stage.sv
+  top: tb_fc2_stage
+
+bench_conv2_stage:
+  deps:
+    - rtl/conv2_stage.sv
+    - tb/tb_conv2_stage.sv
+  top: tb_conv2_stage
+
+bench_telemetry_regs:
+  deps:
+    - rtl/telemetry_regs.sv
+    - tb/tb_telemetry_regs.sv
+  top: tb_telemetry_regs
+
+bench_conv1_stage:
+  deps:
+    - rtl/conv1_stage.sv
+    - tb/tb_conv1_stage.sv
+  top: tb_conv1_stage
+
+bench_fault_replay:
+  deps:
+    - rtl/weight_mem.sv
+    - tb/fault_replay.sv
+    - tb/tb_fault_replay.sv
+  top: tb_fault_replay
+
+bench_weight_mem_ecc:
+  deps:
+    - rtl/ecc_secded.sv
+    - rtl/weight_mem_ecc.sv
+    - tb/tb_weight_mem_ecc.sv
+  top: tb_weight_mem_ecc
+
+bench_ecc_secded:
+  deps:
+    - rtl/ecc_secded.sv
+    - tb/tb_ecc_secded.sv
+  top: tb_ecc_secded
+
 bench_accel_top:
   deps:
-    - weight_mem.sv
-    - weight_loader.sv
-    - mac_array.sv
-    - accel_top.sv
-    - tb_accel_top.sv
+    - rtl/weight_mem.sv
+    - rtl/weight_loader.sv
+    - rtl/mac_array.sv
+    - rtl/accel_top.sv
+    - tb/tb_accel_top.sv
   top: tb_accel_top
+
+bench_accel_server:
+  deps:
+    - rtl/weight_mem.sv
+    - rtl/weight_loader.sv
+    - rtl/mac_array.sv
+    - rtl/accel_top.sv
+    - tb/sim_tcp_dpi.c
+    - tb/tb_accel_server.sv
+  top: tb_accel_server
+
+bench_chip_server:
+  deps:
+    - rtl/conv1_stage.sv
+    - rtl/conv2_stage.sv
+    - rtl/fc1_stage.sv
+    - rtl/fc2_stage.sv
+    - rtl/ctrl_seq.sv
+    - rtl/telemetry_regs.sv
+    - rtl/chip.sv
+    - tb/sim_tcp_dpi.c
+    - tb/tb_chip_server.sv
+  top: tb_chip_server
 
 bench_weight_loader:
   deps:
-    - weight_mem.sv
-    - weight_loader.sv
-    - tb_weight_loader.sv
+    - rtl/weight_mem.sv
+    - rtl/weight_loader.sv
+    - tb/tb_weight_loader.sv
   top: tb_weight_loader
 
 bench_weight_mem:
   deps:
-    - weight_mem.sv
-    - tb_weight_mem.sv
+    - rtl/weight_mem.sv
+    - tb/tb_weight_mem.sv
   top: tb_weight_mem
 
 bench_mac_array:
   deps:
-    - mac_array.sv
-    - tb_mac_array.sv
+    - rtl/mac_array.sv
+    - tb/tb_mac_array.sv
   top: tb_mac_array

@@ -41,7 +41,7 @@ def test_scales_are_positive_floats(scales):
 
 
 def test_scale_formula(arrays, scales):
-    from train import TinyMNIST
+    from model.train import TinyMNIST
     model = TinyMNIST()
     model.load_state_dict(torch.load("model.pt", map_location="cpu"))
     sd = model.state_dict()
@@ -58,7 +58,7 @@ def test_scale_formula(arrays, scales):
 
 
 def test_dequantized_weights_close_to_fp32(arrays, scales):
-    from train import TinyMNIST
+    from model.train import TinyMNIST
     model = TinyMNIST()
     model.load_state_dict(torch.load("model.pt", map_location="cpu"))
     sd = model.state_dict()

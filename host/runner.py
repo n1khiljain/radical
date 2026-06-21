@@ -9,7 +9,7 @@ import sys
 import numpy as np
 
 sys.path.insert(0, ".")                    # run from project root
-from gen_reference import load_artifacts, infer
+from model.gen_reference import load_artifacts, infer
 
 
 def run():
