@@ -1,0 +1,14 @@
+# RAD-HARD-AI host/software side (Person B). Install: pip install -r requirements.txt
+# Model training + INT8 export
+torch==2.12.1
+torchvision==0.27.1
+numpy==2.4.6
+# Demo dashboard
+streamlit==1.58.0
+matplotlib==3.11.0
+pandas==3.0.3
+# Sponsor integrations (offline-safe if no server/DSN configured)
+sentry-sdk==2.63.0
+redis==8.0.0
+# Test suite
+pytest==9.1.1

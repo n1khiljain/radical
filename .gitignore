@@ -1,3 +1,21 @@
+# Python
 .venv/
 __pycache__/
 *.pyc
+.pytest_cache/
+
+# RTL / sim build outputs
+*.vvp
+*.fst
+*.vcd
+a.out
+sim_chip.vvp
+sim_stream_*
+sim_cmd.fifo
+sim_resp.fifo
+simulation_results/
+*.so
+*.vpi
+
+# EDA tool scratch
+radical/

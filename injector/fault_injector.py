@@ -18,11 +18,14 @@ class FaultInjector:
         self._cycle   = 0
 
     def tick(self, n_cycles: int = 1) -> None:
+        # A backend may advertise its own memory geometry (e.g. the behavioral
+        # chip's INT8 weight_mem); otherwise fall back to the contract default.
+        geom = getattr(self._backend, "mem_geometry", _MEM)
         for _ in range(n_cycles):
             self._cycle += 1
             if self._rng.random() < self.ber:
                 mem_id          = self._rng.randint(0, 1)
-                n_addrs, n_bits = _MEM[mem_id]
+                n_addrs, n_bits = geom[mem_id]
                 addr            = self._rng.randint(0, n_addrs - 1)
                 bit_idx         = self._rng.randint(0, n_bits - 1)
                 self._backend.inject_bit_flip(mem_id, addr, bit_idx)

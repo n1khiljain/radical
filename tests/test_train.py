@@ -3,7 +3,7 @@ import torch.nn as nn
 import sys, os
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-from train import TinyMNIST, evaluate
+from model.train import TinyMNIST, evaluate
 
 
 @torch.no_grad()
