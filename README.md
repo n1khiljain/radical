@@ -1,4 +1,4 @@
-# RAD-HARD-AI
+# Radical: our RAD-HARD-AI
 
 **A radiation-hardened INT8 CNN inference accelerator in SystemVerilog.**
 
@@ -53,7 +53,7 @@ Clone the repo and run the command above — you get the same result. Compiles a
 runs in ~1 second. (iverilog prints one harmless `sorry: Case unique ... ignored`
 note; it does not affect the result.)
 
-## Why this isn't faked
+## Why this is legitimate
 
 We adversarially audited the demo to rule out a script printing pre-decided
 numbers. The output values `247`/`259` appear as literals **nowhere** in the
